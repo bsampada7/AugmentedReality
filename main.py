@@ -1,120 +1,111 @@
-import argparse
-
 import cv2 as cv
 import numpy as np
-import math
+from objLoader import *
+from cube import *
+from sift import sift_class
+from utils import getProjectionMatrix
+import time
 
-MIN_MATCH_COUNT = 10
-
+# FLAGS
+MIN_MATCH_COUNT = 5
 DRAW_RECTANGLE = True
+RENDER_CUBE = False
+RENDER_OBJ = True
+
+# CONSTANTS
+# Calibrated instrinsic matrix value for the camera
+camera_intrinsic_mat = np.array(
+    [[553.70386558, 0.0, 306.31746871],
+     [0.0, 551.3634195, 211.01781909],
+     [  0.0, 0.0, 1.0]
+    ]
+    )
 
 def main():
-    """
-    This functions loads the target surface image,
-    """
-    # random value for camera intrinsic matrix
-    camera_intrinsic_mat = np.array(
-        [[553.70386558, 0.0, 306.31746871],
-         [0.0, 551.3634195, 211.01781909],
-         [  0.0, 0.0, 1.0]
-        ]
-        )
+    # Read the reference tag image for performing ar on it
+    tag = cv.imread('data/tag-miami.jpg',cv.IMREAD_GRAYSCALE) 
 
-    tag = cv.imread('data/tag.jpg',cv.IMREAD_GRAYSCALE) 
+    # Initialize the SIFT class for feature matching and description
+    sift = sift_class(tag)
+    
+    # Load the model to render 
+    if(RENDER_OBJ):
+        obj = three_d_object('models/miami-inner.obj', True)
 
-    sift = cv.SIFT_create()
-    kp_tag, des_tag = sift.detectAndCompute(tag,None)
-    bf = cv.BFMatcher()
-
+    # Start webcam
     cam = cv.VideoCapture(0)
 
     while True:
-        # read the current frame
+        # Read the current frame
         ret, frame = cam.read()
         if not ret:
             print("Unable to capture video")
             return 
-        # find and draw the keypoints of the frame
-        kp_frame, des_frame = sift.detectAndCompute(frame,None)
-        # match frame descriptors with model descriptors
-        matches = bf.knnMatch(des_tag,des_frame,k=2)
-
-        # Apply ratio test
-        goodMatches = []
-        for m,n in matches:
-            if m.distance < 0.5*n.distance:
-                goodMatches.append([m])
-
-        # sort them in the order of their distance
-        # the lower the distance, the better the match
-        goodMatches = sorted(goodMatches, key=lambda x: x[0].distance)
+        matches = sift.getMatches(frame)
 
         # compute Homography if enough matches are found
-        if len(goodMatches) > MIN_MATCH_COUNT:
-            print("matches found - %d" % (len(goodMatches)))
+        if len(matches) > MIN_MATCH_COUNT:
+            # print("matches found - %d" % (len(matches)))
+
             # differenciate between source points and destination points
-            src_pts = np.float32([kp_tag[m[0].queryIdx].pt for m in goodMatches]).reshape(-1, 1, 2)
-            dst_pts = np.float32([kp_frame[m[0].trainIdx].pt for m in goodMatches]).reshape(-1, 1, 2)
+            src_pts = np.float32([sift.kp_tag[m[0].queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+            dst_pts = np.float32([sift.kp_frame[m[0].trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
             # compute Homography
-            h_mat, mask = cv.findHomography(src_pts, dst_pts, cv.RANSAC, 5.0)
+            h_mat, _ = cv.findHomography(src_pts, dst_pts, cv.RANSAC, 5.0)
+
             if DRAW_RECTANGLE:
                 # Draw a rectangle that marks the found tag in the frame
                 h, w = tag.shape
+                # h = 1000
+                # w = 1000
                 pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
-                # project corners into frame
-                dst = cv.perspectiveTransform(pts, h_mat)
+
+                try:
+                    # project corners into frame
+                    dst = cv.perspectiveTransform(pts, h_mat)
+                except:
+                    continue
+                
                 # connect them with lines  
                 frame = cv.polylines(frame, [np.int32(dst)], True, (0, 255, 0), 3, cv.LINE_AA)  
-            # # if a valid homography matrix was found render cube on the tag plane
-            # if h_mat is not None:
-            #     try:
-            #         # obtain 3D projection matrix from homography matrix and camera parameters
-            #         projection = getProjectionMatrix(camera_intrinsic_mat, h_mat)  
-            #         # project cube or model
-            #         frame = render(frame, obj, projection, model, False)
-            #         #frame = render(frame, model, projection)
-            #     except:
-            #         pass
-            # draw first 10 matches.
-            # frame = cv.drawMatches(tag, kp_tag, frame, kp_frame, matches[:10], 0, flags=2)
-            frame = cv.drawMatchesKnn(tag,kp_tag,frame,kp_frame,goodMatches[:MIN_MATCH_COUNT],None,flags=2)
-            # show result
+
+            # if a valid homography matrix was found render cube on the tag plane
+            if h_mat is not None:
+                # obtain 3D projection matrix from homography matrix and camera parameters
+                projection = getProjectionMatrix(camera_intrinsic_mat, h_mat) 
+                
+                if(RENDER_OBJ):
+                    # project cube or model and flipped for better control
+                    frame = np.flip(augment(frame, obj, projection, tag), axis = 1) 
+                elif(RENDER_CUBE):
+                    # draw the cube onto the frame
+                    corner_points = []
+                    corner_points.append([int(dst[0][0][0]),int(dst[0][0][1])])
+                    corner_points.append([int(dst[1][0][0]),int(dst[1][0][1])])
+                    corner_points.append([int(dst[2][0][0]),int(dst[2][0][1])])
+                    corner_points.append([int(dst[3][0][0]),int(dst[3][0][1])])
+                    new_corners=cubePoints(corner_points, h_mat, projection, 1)
+                    frame=drawCube(corner_points, new_corners,frame,(255,255,255),(0,0,0),False)
+
+            # draw the matches
+            frame = cv.drawMatchesKnn(tag,sift.kp_tag,frame,sift.kp_frame,matches[:MIN_MATCH_COUNT],None,flags=2)
             
-        else:
-            print("Not enough matches found - %d/%d" % (len(goodMatches), MIN_MATCH_COUNT))
+        # else:
+            # print("Not enough matches found - %d/%d" % (len(matches), MIN_MATCH_COUNT))
+
+        # Show the result
         cv.imshow('frame', frame)
+
+        # Terminate on Esc
         key = cv.waitKey(20)
         if key == 27:
             break
 
     cam.release()
+    
     cv.destroyAllWindows()
     return 0
-
-def getProjectionMatrix(A, H):
-	#finds r3 and appends
-	# A is the intrinsic mat, and H is the homography estimated
-	H = np.float64(H) #for better precision
-	A = np.float64(A)
-	R_12_T = np.linalg.inv(A).dot(H)
-
-	r1 = np.float64(R_12_T[:, 0]) #col1
-	r2 = np.float64(R_12_T[:, 1]) #col2
-	T = R_12_T[:, 2] #translation
-	
-	#ideally |r1| and |r2| should be same
-	#since there is always some error we take square_root(|r1||r2|) as the normalization factor
-	norm = np.float64(math.sqrt(np.float64(np.linalg.norm(r1)) * np.float64(np.linalg.norm(r2))))
-	
-	r3 = np.cross(r1,r2)/(norm)
-	R_T = np.zeros((3, 4))
-	R_T[:, 0] = r1
-	R_T[:, 1] = r2 
-	R_T[:, 2] = r3 
-	R_T[:, 3] = T
-	return A.dot(R_T)
-
-# def drawCube:
 
 
 main()
