@@ -11,9 +11,9 @@ def cubePoints(corners, H, P, height):
         
     H_c = np.stack((np.array(x),np.array(y),np.ones(len(x))))
     
-    # sH_w=np.dot(H,H_c)
+    sH_w=np.dot(H,H_c)
     
-    # H_w=sH_w/sH_w[2]
+    H_w=sH_w/sH_w[2]
     
     P_w=np.stack((H_c[0],H_c[1],np.full(4,height),np.ones(4)),axis=0)
     

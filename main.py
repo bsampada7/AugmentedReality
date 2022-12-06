@@ -3,14 +3,14 @@ import numpy as np
 from objLoader import *
 from cube import *
 from sift import sift_class
-from utils import getProjectionMatrix
+from utils import *
 import time
 
 # FLAGS
 MIN_MATCH_COUNT = 5
 DRAW_RECTANGLE = True
-RENDER_CUBE = False
-RENDER_OBJ = True
+RENDER_CUBE = True
+RENDER_OBJ = False
 
 # CONSTANTS
 # Calibrated instrinsic matrix value for the camera
@@ -24,6 +24,11 @@ camera_intrinsic_mat = np.array(
 def main():
     # Read the reference tag image for performing ar on it
     tag = cv.imread('data/tag-miami.jpg',cv.IMREAD_GRAYSCALE) 
+    tagH, tagW = tag.shape
+
+    # Image to render onto the face of the cube
+    img = cv2.imread('data/me.jpg')
+    img = cv2.resize(img, (260,470), interpolation = cv2.INTER_CUBIC )
 
     # Initialize the SIFT class for feature matching and description
     sift = sift_class(tag)
@@ -45,8 +50,6 @@ def main():
 
         # compute Homography if enough matches are found
         if len(matches) > MIN_MATCH_COUNT:
-            # print("matches found - %d" % (len(matches)))
-
             # differenciate between source points and destination points
             src_pts = np.float32([sift.kp_tag[m[0].queryIdx].pt for m in matches]).reshape(-1, 1, 2)
             dst_pts = np.float32([sift.kp_frame[m[0].trainIdx].pt for m in matches]).reshape(-1, 1, 2)
@@ -57,8 +60,6 @@ def main():
             if DRAW_RECTANGLE:
                 # Draw a rectangle that marks the found tag in the frame
                 h, w = tag.shape
-                # h = 1000
-                # w = 1000
                 pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
 
                 try:
@@ -85,14 +86,26 @@ def main():
                     corner_points.append([int(dst[1][0][0]),int(dst[1][0][1])])
                     corner_points.append([int(dst[2][0][0]),int(dst[2][0][1])])
                     corner_points.append([int(dst[3][0][0]),int(dst[3][0][1])])
-                    new_corners=cubePoints(corner_points, h_mat, projection, 1)
+                    
+                    src = np.array([[[0,0]], [[tagH, 0]], [[tagH, tagW]], [[0, tagW]]])
+
+                    h_mat, _ = cv.findHomography(src, dst, cv.RANSAC, 5.0)
+
+                    new_corners=cubePoints(corner_points, h_mat, projection, 10)
                     frame=drawCube(corner_points, new_corners,frame,(255,255,255),(0,0,0),False)
 
-            # draw the matches
-            frame = cv.drawMatchesKnn(tag,sift.kp_tag,frame,sift.kp_frame,matches[:MIN_MATCH_COUNT],None,flags=2)
+                    dst = np.array([[new_corners[0]], [new_corners[1]], [new_corners[2]], [new_corners[3]]])
+
+                    h_mat, _ = cv.findHomography(src, dst, cv.RANSAC, 5.0)
+
+                    frame1 = warp(np.linalg.inv(h_mat),img, frame.shape[0], frame.shape[1])
+
+                    frame2 = blank_region(frame,np.int32(dst),0)
+                    frame = cv2.bitwise_or(frame1,frame2)
+
             
-        # else:
-            # print("Not enough matches found - %d/%d" % (len(matches), MIN_MATCH_COUNT))
+        else:
+            print("Not enough matches found - %d/%d" % (len(matches), MIN_MATCH_COUNT))
 
         # Show the result
         cv.imshow('frame', frame)

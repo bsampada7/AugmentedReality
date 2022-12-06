@@ -1,5 +1,6 @@
 import numpy as np
 import math
+import cv2
 
 def getProjectionMatrix(A, H):
 	# A is the intrinsic mat, and H is the homography estimated
@@ -23,33 +24,38 @@ def getProjectionMatrix(A, H):
 	R_T[:, 3] = T
 	return A.dot(R_T)
 
-def getProjectionMatrix1(K,H):
-	H = np.linalg.inv(H)
-	h1=H[:,0]
-	h2=H[:,1]
 
-	K=np.transpose(K)
+def blank_region(frame,contour,color):
+    cv2.drawContours(frame,[contour],-1,(color),thickness=-1)
+    return frame
 
-	K_inv=np.linalg.inv(K)
-	a=np.dot(K_inv,h1)
-	c=np.dot(K_inv,h2)
-	lamda=1/((np.linalg.norm(a)+np.linalg.norm(c))/2)
+def warp(H,src,h,w):
+    # create indices of the destination image and linearize them
+    indy, indx = np.indices((h, w), dtype=np.float32)
+    lin_homg_ind = np.array([indx.ravel(), indy.ravel(), np.ones_like(indx).ravel()])
 
-	Bhat=np.dot(K_inv,H)
+    # warp the coordinates of src to those of true_dst
+    map_ind = H.dot(lin_homg_ind)
+    map_x, map_y = map_ind[:-1]/map_ind[-1] 
+    map_x = map_x.reshape(h,w).astype(np.float32)
+    map_y = map_y.reshape(h,w).astype(np.float32)
 
-	if np.linalg.det(Bhat)>0:
-		B=1*Bhat
-	else:
-		B=-1*Bhat
+    # generate new image
+    new_img = np.zeros((h,w,3),dtype="uint8")
 
-	b1=B[:,0]
-	b2=B[:,1]
-	b3=B[:,2]
-	r1=lamda*b1
-	r2=lamda*b2
-	r3=np.cross(r1,r2)
-	t=lamda*b3
+    map_x[map_x>=src.shape[1]] = -1
+    map_x[map_x<0] = -1
+    map_y[map_y>=src.shape[0]] = -1
+    map_x[map_y<0] = -1
 
-	P=np.dot(K,(np.stack((r1,r2,r3,t), axis=1)))
+    for new_x in range(w):
+        for new_y in range(h):
+            x = int(map_x[new_y,new_x])
+            y = int(map_y[new_y,new_x])
 
-	return P
+            if x == -1 or y == -1:
+                pass
+            else:
+                new_img[new_y,new_x] = src[y,x]
+
+    return new_img
